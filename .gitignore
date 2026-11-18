@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.log
+second.txt
+artifacts/

@@ -1,0 +1,15 @@
+app_user: shoplite
+app_dir: /opt/shoplite
+app_port: 8000
+app_version: "1.1.0"
+base_packages:
+  - python3
+  - python3-venv
+  - python3-pip
+  - curl
+  - procps
+  - ca-certificates
+feature_flags:
+  new_checkout: false
+  dark_mode: false
+  recommendations: { enabled: true, rollout: 50 }

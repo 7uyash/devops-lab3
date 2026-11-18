@@ -1,0 +1,138 @@
+name: Task 4 - DevSecOps pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# least privilege: read-only token by default, extra rights only where needed
+permissions:
+  contents: read
+
+concurrency:
+  group: devsecops-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN: 'run(){ echo "$ $*"; eval "$@"; echo; }'
+  TRIVY: aquasec/trivy:0.76.2
+  IMAGE: shoplite:${{ github.sha }}
+
+jobs:
+  secrets:
+    name: 1. Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { fetch-depth: 0 }
+      - name: Scan full git history for leaked secrets
+        run: |
+          eval "$RUN"
+          run "docker run --rm -v \$PWD:/repo ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --config /repo/.gitleaks.toml --redact --no-banner -v"
+
+  sast:
+    name: 2. SAST (Bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with: { python-version: "3.12" }
+      - run: pip install -q bandit==1.9.4
+      - name: Demo - Bandit on intentionally insecure code (report only)
+        continue-on-error: true
+        run: |
+          eval "$RUN"
+          run "bandit -q security/demo/insecure_example.py"
+      - name: Gate - Bandit on application code (fails on medium/high issues)
+        run: |
+          eval "$RUN"
+          run "bandit -r app -ll -ii"
+
+  dependencies:
+    name: 3. Dependency scanning (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with: { python-version: "3.12" }
+      - run: pip install -q pip-audit==2.10.1
+      - name: Demo - legacy requirements with known CVEs (report only)
+        continue-on-error: true
+        run: |
+          eval "$RUN"
+          run "pip-audit -r security/demo/requirements-legacy.txt --desc off"
+      - name: Gate - application requirements must have no known vulnerabilities
+        run: |
+          eval "$RUN"
+          run "pip-audit -r app/requirements.txt --strict"
+
+  test:
+    name: 4. Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with: { python-version: "3.12" }
+      - run: pip install -q -r app/requirements.txt -r requirements-dev.txt
+      - name: pytest with coverage
+        run: |
+          eval "$RUN"
+          run "pytest tests/unit -q --cov=app --cov-report=term-missing"
+
+  image:
+    name: 5. Build, scan image & IaC (Trivy), SBOM
+    needs: [secrets, sast, dependencies, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write   # only this job may upload results to code scanning
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build image
+        run: |
+          eval "$RUN"
+          run "docker build -q -t $IMAGE app/"
+          run "docker image inspect $IMAGE --format 'user={{.Config.User}} size={{.Size}}'"
+      - name: Trivy - image vulnerabilities (all severities, report)
+        run: |
+          eval "$RUN"
+          T="docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $PWD:/src -v $HOME/.cache/trivy:/root/.cache $TRIVY"
+          echo "T=$T" >> "$GITHUB_ENV"
+          run "$T image --quiet --scanners vuln --severity LOW,MEDIUM,HIGH,CRITICAL --format table $IMAGE | head -40"
+      - name: Trivy - misconfiguration scan of Dockerfile and Terraform (IaC)
+        run: |
+          eval "$RUN"
+          run "$T config --quiet --severity MEDIUM,HIGH,CRITICAL /src/app /src/terraform"
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          eval "$RUN"
+          run "$T image --quiet --format cyclonedx --output /src/sbom.cdx.json $IMAGE"
+          run "jq '{bomFormat, specVersion, components: (.components | length)}' sbom.cdx.json"
+          run "jq -r '.components[] | select(.type==\"library\") | \"\(.name)==\(.version)\"' sbom.cdx.json | grep -iE '^(flask|werkzeug|gunicorn|prometheus)'"
+      - name: SARIF for GitHub code scanning
+        run: $T image --quiet --format sarif --output /src/trivy.sarif --severity HIGH,CRITICAL $IMAGE
+      - uses: github/codeql-action/upload-sarif@f09c1c0a94de965c15400f5634aa42fac8fb8f88 # v3.27.5
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+      - name: Security gate - fail on fixable HIGH/CRITICAL vulnerabilities
+        run: |
+          eval "$RUN"
+          run "$T image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 $IMAGE && echo 'GATE PASSED: no fixable HIGH/CRITICAL vulnerabilities'"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: security-reports
+          path: |
+            sbom.cdx.json
+            trivy.sarif

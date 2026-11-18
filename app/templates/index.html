@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ShopLite</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f5f7fb; color: #1d2433; }
+    body.dark { background: #161b26; color: #e6e9ef; }
+    header { background: #1e3a8a; color: #fff; padding: 16px 28px; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px 28px; max-width: 900px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+    body.dark .card { background: #232a38; }
+    button { background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+    #recommend { background: #fef3c7; color: #78350f; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; }
+    #result { margin-top: 18px; padding: 12px; border-radius: 8px; background: #dcfce7; display: none; }
+    small { color: #6b7280; }
+  </style>
+</head>
+<body class="{{ 'dark' if dark else '' }}">
+<header>
+  <h1 id="title">ShopLite</h1>
+  <div>Cart: <span id="cart-count">0</span> &nbsp; <button id="checkout-btn">Checkout</button></div>
+</header>
+<main>
+  {% if recommend %}<div id="recommend">Recommended for you: USB-C Hub is 10% off today!</div>{% endif %}
+  <div class="grid" id="products">
+    {% for p in products %}
+    <div class="card product" data-id="{{ p.id }}">
+      <h3>{{ p.name }}</h3>
+      <p>Rs. {{ p.price }}</p>
+      <button class="add" data-id="{{ p.id }}">Add to cart</button>
+    </div>
+    {% endfor %}
+  </div>
+  <div id="result"></div>
+  <p><small>version {{ version }} &middot; instance {{ instance }}</small></p>
+</main>
+<script>
+  let count = 0;
+  document.querySelectorAll('.add').forEach(b => b.addEventListener('click', () => {
+    count += 1; document.getElementById('cart-count').textContent = count;
+  }));
+  document.getElementById('checkout-btn').addEventListener('click', async () => {
+    const user = new URLSearchParams(location.search).get('user') || 'anonymous';
+    const r = await fetch('/checkout?user=' + encodeURIComponent(user), {method: 'POST'});
+    const d = await r.json();
+    const box = document.getElementById('result');
+    box.style.display = 'block';
+    box.setAttribute('data-version', d.checkout);
+    box.textContent = d.message + ' (' + d.checkout + ', ' + d.steps + ' step' + (d.steps > 1 ? 's' : '') + ') - total Rs. ' + d.total;
+  });
+</script>
+</body>
+</html>

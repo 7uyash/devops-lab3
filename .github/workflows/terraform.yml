@@ -1,0 +1,80 @@
+name: Task 2 - Terraform infrastructure as code
+
+on:
+  push:
+    branches: [main]
+    paths: ["terraform/**", "app/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: terraform
+
+env:
+  RUN: 'run(){ echo "$ $*"; eval "$@"; echo; }'
+  TF_IN_AUTOMATION: "true"
+  TF_CLI_ARGS: "-no-color"
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Format and init
+        run: |
+          eval "$RUN"
+          run terraform version
+          run "terraform fmt -check -recursive && echo 'fmt: all files formatted'"
+          run terraform init
+          run terraform validate
+
+      - name: Plan (2 app containers)
+        run: |
+          eval "$RUN"
+          run "terraform plan -out=tfplan"
+
+      - name: Apply
+        run: |
+          eval "$RUN"
+          run "terraform apply -auto-approve tfplan"
+          run "terraform output"
+          run "docker ps --filter label=project=devops-lab3 --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
+
+      - name: Test the load balancer
+        run: |
+          eval "$RUN"
+          sleep 5
+          run "for i in \$(seq 1 6); do curl -s localhost:8080/health; echo; done"
+
+      - name: Scale out to 4 containers (change one variable)
+        run: |
+          eval "$RUN"
+          run "terraform plan -var app_count=4 -out=tfplan | grep -E '^  # |Plan:'"
+          run "terraform apply -auto-approve tfplan | tail -12"
+          sleep 5
+          run "for i in \$(seq 1 8); do curl -s localhost:8080/health; echo; done"
+          run "terraform state list"
+          run "terraform output app_containers"
+
+      - name: Idempotency check
+        run: |
+          eval "$RUN"
+          run "terraform plan -var app_count=4 -detailed-exitcode | tail -3"
+
+      - name: Scale in to 3 and destroy
+        run: |
+          eval "$RUN"
+          run "terraform apply -auto-approve -var app_count=3 | grep -E 'Destroying|Destruction|Apply complete'"
+          run "docker ps --filter label=project=devops-lab3 --format 'table {{.Names}}\t{{.Status}}'"
+          run "terraform destroy -auto-approve -var app_count=3 | tail -4"
+          run "docker ps --filter label=project=devops-lab3 --format '{{.Names}}' | wc -l"

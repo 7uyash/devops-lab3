@@ -1,0 +1,84 @@
+name: Task 5 - Monitoring with Prometheus and Grafana
+
+on:
+  push:
+    branches: [main]
+    paths: ["monitoring/**", "app/**", "scripts/**", ".github/workflows/monitoring.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN: 'run(){ echo "$ $*"; eval "$@"; echo; }'
+  Q: 'q(){ echo "$ promql: $1"; curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" | jq -c ".data.result[] | {metric: .metric, value: .value[1]}"; echo; }'
+
+jobs:
+  monitoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Prometheus, Grafana, node-exporter and 2 app instances
+        working-directory: monitoring
+        run: |
+          eval "$RUN"
+          run "docker compose up -d --build --quiet-pull 2>&1 | tail -7"
+          for i in $(seq 1 30); do curl -s localhost:3000/api/health >/dev/null && curl -s localhost:9090/-/ready >/dev/null && break; sleep 3; done
+          run "docker compose ps --format 'table {{.Service}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
+          run "docker run --rm -v \$PWD/prometheus:/p --entrypoint promtool prom/prometheus:v2.55.1 check config /p/prometheus.yml"
+          run "curl -s localhost:8001/metrics | grep -E '^(http_requests_total|app_info|feature_flag_enabled)' | head -8"
+
+      - name: Scrape targets and provisioned Grafana
+        run: |
+          eval "$RUN"
+          sleep 10
+          run "curl -s localhost:9090/api/v1/targets | jq -r '.data.activeTargets[] | \"\(.labels.job)\t\(.scrapeUrl)\t\(.health)\"'"
+          run "curl -s localhost:3000/api/datasources | jq -c '.[] | {name, type, url}'"
+          run "curl -s 'localhost:3000/api/search?type=dash-db' | jq -c '.[] | {title, uid, folderTitle}'"
+
+      - name: Generate load, toggle a feature flag, simulate an outage
+        working-directory: monitoring
+        run: |
+          eval "$RUN"
+          (bash ../scripts/traffic.sh http://localhost:8001 200 >/dev/null &)
+          (bash ../scripts/traffic.sh http://localhost:8002 200 >/dev/null &)
+          sleep 80
+          echo '{"new_checkout": true}' > /tmp/flags.json
+          run "docker compose cp /tmp/flags.json app1:/app/flags.json"
+          run "docker compose cp /tmp/flags.json app2:/app/flags.json"
+          run "curl -s -X POST 'localhost:8001/checkout?user=demo'; echo"
+          sleep 60
+          run "docker compose stop app2"
+          sleep 45
+
+      - name: PromQL queries and alerts
+        run: |
+          eval "$RUN"; eval "$Q"
+          q 'sum(rate(http_requests_total[1m]))'
+          q 'sum by (endpoint) (rate(http_requests_total[5m]))'
+          q 'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))'
+          q 'sum(increase(http_requests_total{status=~"5.."}[5m])) / sum(increase(http_requests_total[5m]))'
+          q 'sum by (checkout_version) (shop_orders_total)'
+          q 'up{job="shoplite"}'
+          run "curl -s localhost:9090/api/v1/alerts | jq -c '.data.alerts[] | {alert: .labels.alertname, state, instance: .labels.instance, summary: .annotations.summary}'"
+
+      - name: Screenshots
+        run: |
+          pip install -q playwright==1.48.0 && python -m playwright install --with-deps chromium >/dev/null 2>&1
+          mkdir -p shots
+          python scripts/shot.py "http://localhost:3000/d/shoplite/shoplite?orgId=1&from=now-6m&to=now&kiosk" shots/grafana_dashboard.png --wait 10 --height 1250
+          python scripts/shot.py "http://localhost:9090/targets" shots/prom_targets.png --wait 4 --height 900
+          python scripts/shot.py "http://localhost:9090/alerts" shots/prom_alerts.png --wait 4 --height 900
+          python scripts/shot.py "http://localhost:9090/graph?g0.expr=sum%20by%20(endpoint)%20(rate(http_requests_total%5B1m%5D))&g0.tab=0&g0.range_input=6m" shots/prom_graph.png --wait 6 --height 900
+          python scripts/shot.py "http://localhost:3000/dashboards" shots/grafana_list.png --wait 5 --height 700
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-screenshots
+          path: shots/

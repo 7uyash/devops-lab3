@@ -1,0 +1,7 @@
+# Intentionally outdated dependencies used ONLY to demonstrate that the
+# dependency scanner catches known vulnerabilities. Not used by the app.
+flask==0.12.2
+requests==2.19.1
+jinja2==2.10
+pyyaml==5.3
+urllib3==1.24.1

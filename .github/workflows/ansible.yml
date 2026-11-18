@@ -1,0 +1,99 @@
+name: Task 1 - Ansible configuration management
+
+on:
+  push:
+    branches: [main]
+    paths: ["ansible/**", "app/**", ".github/workflows/ansible.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN: 'run(){ echo "$ $*"; eval "$@"; echo; }'
+  ANSIBLE_FORCE_COLOR: "0"
+  PY_COLORS: "0"
+
+jobs:
+  ansible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: |
+          eval "$RUN"
+          run "pipx install --include-deps ansible-core==2.17.7 >/dev/null && pipx inject ansible-core docker >/dev/null"
+          run "ansible-galaxy collection install community.docker >/dev/null"
+          run "ansible --version | head -3"
+
+      - name: Start two target nodes (Ubuntu 24.04)
+        run: |
+          eval "$RUN"
+          run "docker network create lab3net"
+          for n in 1 2; do
+            run "docker run -d --name lab3-node$n --hostname node$n --network lab3net -p 800$n:8000 ubuntu:24.04 sleep infinity"
+          done
+          run "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"
+
+      - name: Inventory, connectivity and ad-hoc commands
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          run cat inventory.ini
+          run "ansible-inventory --graph"
+          run "ansible web -m raw -a 'apt-get update -qq >/dev/null && apt-get install -y -qq python3 >/dev/null && echo python3 ready'"
+          run "ansible web -m ping"
+          run "ansible web -a 'uname -srm'"
+          run "ansible-playbook site.yml --syntax-check"
+
+      - name: List tasks
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          run "ansible-playbook site.yml --list-tasks"
+
+      - name: Apply playbook (first run - makes changes)
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          run ansible-playbook site.yml
+
+      - name: Apply playbook again (idempotency - no changes expected)
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          ansible-playbook site.yml | tee second.txt
+          echo
+          run "grep -E 'node[12] +:' second.txt"
+
+      - name: Dry run of a config change (check + diff, nothing applied)
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          run "ansible-playbook site.yml --check --diff -e app_version=1.2.0 --limit node1 | sed -n '/Render environment file/,/Render feature/p'"
+          run "ansible node1 -a 'grep APP_VERSION /etc/shoplite/app.env'"
+
+      - name: Verify configuration on the nodes
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          run "ansible web -a 'cat /etc/shoplite/app.env'"
+          run "ansible web -m shell -a 'pgrep -a gunicorn | head -2; id shoplite'"
+          run "curl -s localhost:8001/health; echo"
+          run "curl -s localhost:8002/health; echo"
+          run "curl -s 'localhost:8001/checkout?user=alice' -X POST; echo"
+
+      - name: Toggle a feature flag on all nodes with Ansible (no restart)
+        working-directory: ansible
+        run: |
+          eval "$RUN"
+          run "ansible-playbook flags.yml -e flag_name=new_checkout -e flag_value=true"
+          run "curl -s 'localhost:8001/checkout?user=alice' -X POST; echo"
+          run "curl -s 'localhost:8002/checkout?user=alice' -X POST; echo"
+          run "ansible web -m shell -a 'tail -n 3 /var/log/shoplite/app.log'"

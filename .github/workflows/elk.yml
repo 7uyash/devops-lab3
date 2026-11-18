@@ -1,0 +1,82 @@
+name: Task 3 - Centralized logging with ELK
+
+on:
+  push:
+    branches: [main]
+    paths: ["elk/**", "app/**", "scripts/**", ".github/workflows/elk.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN: 'run(){ echo "$ $*"; eval "$@"; echo; }'
+
+jobs:
+  elk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the ELK stack + app + Filebeat
+        working-directory: elk
+        run: |
+          eval "$RUN"
+          run "docker compose up -d --build --quiet-pull 2>&1 | tail -8"
+          for i in $(seq 1 60); do curl -s localhost:9200 >/dev/null && break; sleep 5; done
+          run "curl -s localhost:9200"
+          run "curl -s -X PUT localhost:9200/_index_template/shoplite -H 'Content-Type: application/json' -d @kibana/index-template.json; echo"
+          for i in $(seq 1 60); do curl -s localhost:5601/api/status | grep -q '"level":"available"' && break; sleep 5; done
+          run "curl -s localhost:5601/api/status | jq '{kibana: .version.number, status: .status.overall.level}'"
+          run "docker compose ps --format 'table {{.Service}}\t{{.Image}}\t{{.Status}}'"
+
+      - name: Generate application traffic (logs)
+        run: |
+          eval "$RUN"
+          run "bash scripts/traffic.sh http://localhost:8000 90"
+          run "docker compose -f elk/docker-compose.yml exec -T app tail -n 6 /logs/app.log"
+
+      - name: Verify collection and parsing in Elasticsearch
+        run: |
+          eval "$RUN"
+          sleep 20
+          run "curl -s 'localhost:9200/_cat/indices/shoplite-*?v&h=index,health,docs.count,store.size'"
+          run "curl -s 'localhost:9200/shoplite-logs-*/_search?size=1&q=log_type:access&sort=@timestamp:desc' | jq '.hits.hits[0]._source | del(.message, .event, .log)'"
+          run "curl -s 'localhost:9200/shoplite-logs-*/_search?size=1&q=level:ERROR%20AND%20log_type:application' | jq '.hits.hits[0]._source | {level, error_message, user, log_type}'"
+          run "curl -s 'localhost:9200/shoplite-logs-*/_count?q=tags:_grok_failed' | jq .count"
+          run "curl -s localhost:9200/shoplite-logs-*/_search -H 'Content-Type: application/json' -d '{\"size\":0,\"aggs\":{\"status\":{\"terms\":{\"field\":\"status_class\"}},\"levels\":{\"terms\":{\"field\":\"level\"}},\"slowest\":{\"terms\":{\"field\":\"path\",\"order\":{\"avg_ms\":\"desc\"},\"size\":4},\"aggs\":{\"avg_ms\":{\"avg\":{\"field\":\"duration_ms\"}}}}}}' | jq '.aggregations | {status: [.status.buckets[] | {(.key): .doc_count}], levels: [.levels.buckets[] | {(.key): .doc_count}], slowest_endpoints_ms: [.slowest.buckets[] | {(.key): (.avg_ms.value | floor)}]}'"
+          run "curl -s localhost:9600/_node/stats/pipelines | jq '.pipelines.main.events'"
+
+      - name: Import Kibana data view, visualizations and dashboard
+        working-directory: elk/kibana
+        run: |
+          eval "$RUN"
+          run "curl -s -X POST 'localhost:5601/api/saved_objects/_import?overwrite=true' -H 'kbn-xsrf: true' --form file=@saved_objects.ndjson | jq '{success, successCount, errors}'"
+          run "curl -s 'localhost:5601/api/saved_objects/_find?type=visualization&type=dashboard&type=search&per_page=20' -H 'kbn-xsrf: true' | jq -r '.saved_objects[] | \"\(.type)\t\(.attributes.title)\"'"
+
+      - name: Screenshots of Kibana
+        run: |
+          pip install -q playwright==1.48.0 && python -m playwright install --with-deps chromium >/dev/null 2>&1
+          mkdir -p shots
+          bash scripts/traffic.sh http://localhost:8000 20 >/dev/null
+          sleep 15
+          T="_g=(time:(from:now-30m,to:now))"
+          python scripts/shot.py "http://localhost:5601/app/dashboards#/view/shoplite-dashboard?$T" shots/kibana_dashboard.png --wait 25 --height 1500
+          python scripts/shot.py "http://localhost:5601/app/discover#/?$T&_a=(dataSource:(dataViewId:shoplite-logs,type:dataView),columns:!(level,method,path,status,duration_ms,user,instance))" shots/kibana_discover.png --wait 20
+          python scripts/shot.py "http://localhost:5601/app/discover#/view/search-errors?$T" shots/kibana_errors.png --wait 20
+          python scripts/shot.py "http://localhost:5601/app/management/kibana/dataViews/dataView/shoplite-logs" shots/kibana_dataview.png --wait 12
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elk-screenshots
+          path: shots/
+
+      - name: Logs on failure
+        if: failure()
+        working-directory: elk
+        run: docker compose logs --tail 60

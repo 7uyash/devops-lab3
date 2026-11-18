@@ -1,0 +1,15 @@
+---
+# Turn a feature flag on/off on every node without restarting the app
+- name: Update feature flags
+  hosts: web
+  vars:
+    flag_name: new_checkout
+    flag_value: true
+  tasks:
+    - name: Set {{ flag_name }} = {{ flag_value }}
+      ansible.builtin.template:
+        src: flags.json.j2
+        dest: "{{ app_dir }}/flags.json"
+        mode: "0644"
+      vars:
+        feature_flags: "{{ feature_flags | combine({flag_name: flag_value}) }}"

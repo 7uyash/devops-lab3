@@ -1,0 +1,13 @@
+filebeat.inputs:
+  - type: filestream
+    id: shoplite
+    paths: ["/logs/app.log"]
+    fields:
+      service: shoplite
+      env: lab3
+    fields_under_root: true
+
+output.logstash:
+  hosts: ["logstash:5044"]
+
+logging.level: warning

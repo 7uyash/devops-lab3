@@ -1,0 +1,91 @@
+name: Task 6 - Feature flags, load testing and Selenium
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "tests/**", "requirements-dev.txt", ".github/workflows/testing.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUN: 'run(){ echo "$ $*"; eval "$@"; echo; }'
+  FLAGS: /tmp/shoplite-flags.json
+
+jobs:
+  testing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -r app/requirements.txt -r requirements-dev.txt
+
+      - name: Start the app (gunicorn, 4 workers)
+        run: |
+          cp app/flags.json $FLAGS
+          cd app && FLAGS_FILE=$FLAGS APP_INSTANCE=ci-runner nohup gunicorn -b 0.0.0.0:8000 -w 4 --threads 4 app:app > /tmp/app.log 2>&1 &
+          for i in $(seq 1 20); do curl -s localhost:8000/health && break; sleep 1; done
+
+      - name: Feature flags - toggle at runtime without redeploy
+        run: |
+          eval "$RUN"
+          run cat $FLAGS
+          run "curl -s 'localhost:8000/flags?user=alice' | jq -c"
+          run "curl -s -X POST 'localhost:8000/checkout?user=alice' | jq -c"
+          run "jq '.new_checkout = true' $FLAGS > /tmp/f && mv /tmp/f $FLAGS && echo 'flag new_checkout -> true (app NOT restarted)'"
+          run "curl -s -X POST 'localhost:8000/checkout?user=alice' | jq -c"
+          echo "--- percentage rollout: recommendations enabled for 50% of users ---"
+          run "for u in \$(seq 1 200); do curl -s \"localhost:8000/flags?user=u\$u\" | jq -r .result.recommendations; done | sort | uniq -c"
+          run "for i in 1 2 3; do curl -s 'localhost:8000/flags?user=u7' | jq -r .result.recommendations; done | tr '\n' ' '; echo '(same user always gets the same result)'"
+          run "jq '.new_checkout = false' $FLAGS > /tmp/f && mv /tmp/f $FLAGS && echo 'kill switch: new_checkout -> false'"
+          run "curl -s -X POST 'localhost:8000/checkout?user=alice' | jq -c"
+          run "curl -s localhost:8000/metrics | grep -E '^(feature_flag_enabled|shop_orders_total)'"
+
+      - name: Unit tests (incl. flag logic)
+        run: |
+          eval "$RUN"
+          run "pytest tests/unit -v 2>&1 | grep -E 'PASSED|FAILED|passed|failed'"
+
+      - name: Load test with Locust (50 users, 60 s) - flag OFF
+        run: |
+          eval "$RUN"
+          mkdir -p shots reports
+          run "locust -f tests/load/locustfile.py --headless -u 50 -r 10 -t 60s --host http://localhost:8000 --html reports/locust_flag_off.html --csv reports/off --only-summary 2>&1 | grep -vE '^\\[' | tail -22"
+
+      - name: Load test with Locust - flag ON (new checkout)
+        run: |
+          eval "$RUN"
+          jq '.new_checkout = true' $FLAGS > /tmp/f && mv /tmp/f $FLAGS
+          run "locust -f tests/load/locustfile.py --headless -u 50 -r 10 -t 60s --host http://localhost:8000 --html reports/locust_flag_on.html --csv reports/on --only-summary 2>&1 | grep -vE '^\\[' | tail -22"
+          echo "--- /checkout comparison (ms) ---"
+          run "for f in off on; do echo \"flag \$f: \$(grep ',/checkout,' reports/\${f}_stats.csv | cut -d, -f3-7 )\"; done"
+          echo "columns: requests,failures,median_ms,avg_ms,min_ms"
+          jq '.new_checkout = false' $FLAGS > /tmp/f && mv /tmp/f $FLAGS
+
+      - name: Selenium UI tests (headless Chrome)
+        run: |
+          eval "$RUN"
+          run "google-chrome --version; python -c 'import selenium; print(\"selenium\", selenium.__version__)'"
+          run "FLAGS_FILE_PATH=$FLAGS SHOTS_DIR=shots pytest tests/selenium -v 2>&1 | grep -E 'PASSED|FAILED|ERROR|passed|failed'"
+          run "ls shots"
+
+      - name: Screenshots of Locust reports
+        run: |
+          pip install -q playwright==1.48.0 && python -m playwright install --with-deps chromium >/dev/null 2>&1
+          python scripts/shot.py "file://$PWD/reports/locust_flag_off.html" shots/locust_off.png --wait 3 --height 1400
+          python scripts/shot.py "file://$PWD/reports/locust_flag_on.html" shots/locust_on.png --wait 3 --height 1400
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: testing-artifacts
+          path: |
+            shots/
+            reports/

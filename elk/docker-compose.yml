@@ -1,0 +1,55 @@
+# Centralized logging: ShopLite -> Filebeat -> Logstash (grok parsing) -> Elasticsearch -> Kibana
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ports: ["9200:9200"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s localhost:9200/_cluster/health | grep -qE 'green|yellow'"]
+      interval: 10s
+      retries: 30
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.15.3
+    environment:
+      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.monitoring.enabled=false
+    volumes:
+      - ./logstash/pipeline.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    ports: ["5044:5044", "9600:9600"]
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - TELEMETRY_OPTIN=false
+      - TELEMETRY_ENABLED=false
+    ports: ["5601:5601"]
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+
+  app:
+    build: ../app
+    environment:
+      - LOG_FILE=/logs/app.log
+      - APP_INSTANCE=shoplite-1
+    user: root
+    volumes: ["applogs:/logs"]
+    ports: ["8000:8000"]
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.15.3
+    user: root
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - applogs:/logs:ro
+    depends_on: [logstash, app]
+
+volumes:
+  applogs:

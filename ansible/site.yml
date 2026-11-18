@@ -1,0 +1,100 @@
+---
+- name: Bootstrap target nodes (install Python so Ansible modules can run)
+  hosts: web
+  gather_facts: false
+  tasks:
+    - name: Install python3 with the raw module
+      ansible.builtin.raw: test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y -qq python3)
+      register: boot
+      changed_when: "'Setting up python3' in boot.stdout"
+
+- name: Configure ShopLite web servers
+  hosts: web
+  become: true
+  tasks:
+    - name: Install base packages
+      ansible.builtin.apt:
+        name: "{{ base_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create application user
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+
+    - name: Create directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: "0755"
+      loop:
+        - "{{ app_dir }}"
+        - /etc/shoplite
+        - /var/log/shoplite
+
+    - name: Copy application code
+      ansible.builtin.copy:
+        src: "../app/{{ item }}"
+        dest: "{{ app_dir }}/"
+        owner: "{{ app_user }}"
+        mode: "0644"
+      loop: [app.py, requirements.txt, templates]
+      notify: Restart shoplite
+
+    - name: Install Python dependencies in a virtualenv
+      ansible.builtin.pip:
+        requirements: "{{ app_dir }}/requirements.txt"
+        virtualenv: "{{ app_dir }}/venv"
+        virtualenv_command: python3 -m venv
+
+    - name: Render environment file
+      ansible.builtin.template:
+        src: app.env.j2
+        dest: /etc/shoplite/app.env
+        mode: "0644"
+      notify: Restart shoplite
+
+    - name: Render feature flags (read live by the app, no restart needed)
+      ansible.builtin.template:
+        src: flags.json.j2
+        dest: "{{ app_dir }}/flags.json"
+        owner: "{{ app_user }}"
+        mode: "0644"
+
+    - name: Install start script
+      ansible.builtin.template:
+        src: start.sh.j2
+        dest: /usr/local/bin/shoplite-start
+        mode: "0755"
+
+    - name: Start ShopLite
+      ansible.builtin.command: /usr/local/bin/shoplite-start
+      register: start
+      changed_when: "'started' in start.stdout"
+
+    - name: Wait for the app port
+      ansible.builtin.wait_for:
+        port: "{{ app_port }}"
+        timeout: 30
+
+    - name: Health check
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/health"
+        return_content: true
+      register: health
+      retries: 5
+      delay: 2
+      until: health.status == 200
+
+    - name: Show health result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} -> {{ health.json }}"
+
+  handlers:
+    - name: Restart shoplite
+      ansible.builtin.shell: pkill -f "gunicorn.*app:app" || true; sleep 1; /usr/local/bin/shoplite-start
+      changed_when: true
