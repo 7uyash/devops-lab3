@@ -1,1 +1,1 @@
-{{ feature_flags | to_nice_json }}
+{{ (flags_to_write | default(feature_flags)) | to_nice_json }}

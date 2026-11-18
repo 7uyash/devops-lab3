@@ -12,4 +12,4 @@
         dest: "{{ app_dir }}/flags.json"
         mode: "0644"
       vars:
-        feature_flags: "{{ feature_flags | combine({flag_name: flag_value}) }}"
+        flags_to_write: "{{ feature_flags | combine({flag_name: flag_value | bool}) }}"
