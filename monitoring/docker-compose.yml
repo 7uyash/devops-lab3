@@ -13,7 +13,7 @@ services:
     image: prom/node-exporter:v1.8.2
     command: ["--path.rootfs=/host"]
     pid: host
-    volumes: ["/:/host:ro,rslave"]
+    volumes: ["/:/host:ro"]
 
   prometheus:
     image: prom/prometheus:v2.55.1
