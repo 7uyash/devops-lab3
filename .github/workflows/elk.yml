@@ -71,7 +71,7 @@ jobs:
           python scripts/shot.py "http://localhost:5601/app/discover#/view/search-errors?$T" shots/kibana_errors.png --wait 20
           python scripts/shot.py "http://localhost:5601/app/management/kibana/dataViews/dataView/shoplite-logs" shots/kibana_dataview.png --wait 12
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: elk-screenshots
           path: shots/

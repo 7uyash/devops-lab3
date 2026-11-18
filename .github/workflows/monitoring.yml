@@ -78,7 +78,7 @@ jobs:
           python scripts/shot.py "http://localhost:9090/graph?g0.expr=sum%20by%20(endpoint)%20(rate(http_requests_total%5B1m%5D))&g0.tab=0&g0.range_input=6m" shots/prom_graph.png --wait 6 --height 900
           python scripts/shot.py "http://localhost:3000/dashboards" shots/grafana_list.png --wait 5 --height 700
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: monitoring-screenshots
           path: shots/

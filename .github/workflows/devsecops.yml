@@ -130,7 +130,7 @@ jobs:
         run: |
           eval "$RUN"
           run "$T image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 $IMAGE && echo 'GATE PASSED: no fixable HIGH/CRITICAL vulnerabilities'"
-      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: security-reports
           path: |
