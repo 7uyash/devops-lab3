@@ -10,9 +10,6 @@ locals {
 resource "docker_network" "app_net" {
   name   = "${var.environment}-net"
   driver = "bridge"
-  ipam_config {
-    subnet = "172.30.0.0/24"
-  }
 }
 
 # ---------- image built from the repo ----------
