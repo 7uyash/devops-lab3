@@ -35,7 +35,7 @@ jobs:
       - name: Scan full git history for leaked secrets
         run: |
           eval "$RUN"
-          run "docker run --rm -v \$PWD:/repo ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --config /repo/.gitleaks.toml --redact --no-banner -v"
+          run "docker run --rm -v \$PWD:/repo ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --config /repo/.gitleaks.toml --redact --no-banner --no-color -v"
 
   sast:
     name: 2. SAST (Bandit)
@@ -69,7 +69,7 @@ jobs:
         continue-on-error: true
         run: |
           eval "$RUN"
-          run "pip-audit -r security/demo/requirements-legacy.txt --desc off"
+          run "pip-audit -r security/demo/requirements-legacy.txt --no-deps --desc off"
       - name: Gate - application requirements must have no known vulnerabilities
         run: |
           eval "$RUN"
