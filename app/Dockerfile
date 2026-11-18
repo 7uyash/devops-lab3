@@ -3,7 +3,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8000
 WORKDIR /app
 
-# run as a non-root user
+# apply Debian security patches (fixes CVEs flagged by Trivy), then run as a non-root user
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 appuser
 
 COPY requirements.txt .
