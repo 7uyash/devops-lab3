@@ -109,7 +109,10 @@ jobs:
           eval "$RUN"
           T="docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $PWD:/src -v $HOME/.cache/trivy:/root/.cache $TRIVY"
           echo "T=$T" >> "$GITHUB_ENV"
-          run "$T image --quiet --scanners vuln --severity LOW,MEDIUM,HIGH,CRITICAL --format table $IMAGE | head -40"
+          run "$T image --quiet --scanners vuln --format json --output /src/trivy-image.json $IMAGE"
+          run "jq -r '.Results[] | \"\(.Target) [\(.Type)]: \((.Vulnerabilities // []) | length) vulns - \((.Vulnerabilities // []) | group_by(.Severity) | map(\"\(.[0].Severity)=\(length)\") | join(\" \"))\"' trivy-image.json"
+          run "jq '[.Results[].Vulnerabilities // [] | .[] | select(.Severity==\"HIGH\" or .Severity==\"CRITICAL\")] | {high_or_critical: length, fixable: (map(select(.FixedVersion != null and .FixedVersion != \"\")) | length)}' trivy-image.json"
+          run "jq -r '[.Results[].Vulnerabilities // [] | .[] | select(.Severity==\"HIGH\")] | .[:8][] | \"\(.VulnerabilityID)  \(.PkgName) \(.InstalledVersion)  fixed: \(.FixedVersion // \"-\")  [\(.Status)]\"' trivy-image.json"
       - name: Trivy - misconfiguration scan of Dockerfile and Terraform (IaC)
         run: |
           eval "$RUN"
@@ -136,3 +139,4 @@ jobs:
           path: |
             sbom.cdx.json
             trivy.sarif
+            trivy-image.json
