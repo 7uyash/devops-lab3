@@ -116,7 +116,8 @@ jobs:
       - name: Trivy - misconfiguration scan of Dockerfile and Terraform (IaC)
         run: |
           eval "$RUN"
-          run "$T config --quiet --severity MEDIUM,HIGH,CRITICAL /src/app /src/terraform"
+          run "$T config --quiet --severity MEDIUM,HIGH,CRITICAL /src/app"
+          run "$T config --quiet --severity MEDIUM,HIGH,CRITICAL /src/terraform"
       - name: Generate SBOM (CycloneDX)
         run: |
           eval "$RUN"
