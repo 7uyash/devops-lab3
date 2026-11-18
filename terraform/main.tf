@@ -31,12 +31,13 @@ resource "docker_image" "nginx" {
 
 # ---------- application tier (scales with var.app_count) ----------
 resource "docker_container" "app" {
-  count    = var.app_count
-  name     = local.app_names[count.index]
-  image    = docker_image.app.image_id
-  restart  = "unless-stopped"
-  memory   = var.memory_mb
-  hostname = local.app_names[count.index]
+  count       = var.app_count
+  name        = local.app_names[count.index]
+  image       = docker_image.app.image_id
+  restart     = "unless-stopped"
+  memory      = var.memory_mb
+  memory_swap = var.memory_mb * 2
+  hostname    = local.app_names[count.index]
 
   env = [
     "APP_INSTANCE=${local.app_names[count.index]}",
