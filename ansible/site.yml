@@ -78,11 +78,13 @@
       ansible.builtin.command: /usr/local/bin/shoplite-start
       register: start
       changed_when: "'started' in start.stdout"
+      when: not ansible_check_mode
 
     - name: Wait for the app port
       ansible.builtin.wait_for:
         port: "{{ app_port }}"
         timeout: 30
+      when: not ansible_check_mode
 
     - name: Health check
       ansible.builtin.uri:
@@ -92,10 +94,12 @@
       retries: 5
       delay: 2
       until: health.status == 200
+      when: not ansible_check_mode
 
     - name: Show health result
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} -> {{ health.json }}"
+      when: not ansible_check_mode
 
   handlers:
     - name: Restart shoplite
