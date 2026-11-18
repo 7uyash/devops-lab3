@@ -8,3 +8,4 @@ tfplan
 *.log
 second.txt
 artifacts/
+local-runs/
