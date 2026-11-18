@@ -1,7 +1,7 @@
 #!/bin/sh
 # Managed by Ansible. Starts ShopLite with gunicorn if it is not already running.
 set -a; . /etc/shoplite/app.env; set +a
-if pgrep -f "gunicorn.*app:app" >/dev/null; then echo "already running"; exit 0; fi
+if pgrep -f "[g]unicorn.*app:app" >/dev/null; then echo "already running"; exit 0; fi
 cd {{ app_dir }}
 nohup {{ app_dir }}/venv/bin/gunicorn --bind 0.0.0.0:{{ app_port }} --workers 2 \
   --user {{ app_user }} --group {{ app_user }} app:app >> /var/log/shoplite/gunicorn.log 2>&1 &

@@ -71,6 +71,9 @@
         dest: /usr/local/bin/shoplite-start
         mode: "0755"
 
+    - name: Apply pending restarts before starting
+      ansible.builtin.meta: flush_handlers
+
     - name: Start ShopLite
       ansible.builtin.command: /usr/local/bin/shoplite-start
       register: start
@@ -96,5 +99,5 @@
 
   handlers:
     - name: Restart shoplite
-      ansible.builtin.shell: pkill -f "gunicorn.*app:app" || true; sleep 1; /usr/local/bin/shoplite-start
+      ansible.builtin.shell: pkill -f "[g]unicorn.*app:app" || true; sleep 1; /usr/local/bin/shoplite-start
       changed_when: true
